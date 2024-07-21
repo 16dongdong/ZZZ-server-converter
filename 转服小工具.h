@@ -23,6 +23,13 @@ private:
     bool loadConfig();
     void showProgressDialog(HWND hwnd, const std::wstring& message);
     void copyDirectoryRecursively(const std::wstring& source, const std::wstring& target);
+    void updateReplacementFiles(HWND hwnd);
+    void backupFiles(const std::wstring& destination, const std::wstring& target);
+    void backupResources(const std::wstring& destination, const std::wstring& target);
+    void reselectDirectories(HWND hwnd);
+    void copyToClipboard(const std::wstring& text);
+    static std::wstring s2ws(const std::string& str);
+    static std::string ws2s(const std::wstring& wstr);
 
     std::wstring source_global;
     std::wstring source_cn;

@@ -4,7 +4,6 @@
 #include <commctrl.h>
 #include <filesystem>
 #include <iostream>
-
 #pragma comment(lib, "comctl32.lib")
 
 namespace fs = std::filesystem;
@@ -43,7 +42,7 @@ void 转服小工具::run() {
         CLASS_NAME,
         L"转服小工具",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 400, 300,
+        CW_USEDEFAULT, CW_USEDEFAULT, 400, 400,
         NULL,
         NULL,
         hInstance,
@@ -74,9 +73,33 @@ void 转服小工具::run() {
         100, 80, 200, 30,
         hwndMain, (HMENU)1, hInstance, NULL);
 
+    CreateWindow(
+        L"BUTTON", L"检测当前服务器",
+        WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+        100, 130, 200, 30,
+        hwndMain, (HMENU)2, hInstance, NULL);
+
+    CreateWindow(
+        L"BUTTON", L"更新当前服务器的替换文件",
+        WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+        100, 180, 200, 30,
+        hwndMain, (HMENU)3, hInstance, NULL);
+
+    CreateWindow(
+        L"BUTTON", L"备份当前服务器资源文件夹",
+        WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+        100, 230, 200, 30,
+        hwndMain, (HMENU)4, hInstance, NULL);
+
+    CreateWindow(
+        L"BUTTON", L"重选文件目录",
+        WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+        100, 280, 200, 30,
+        hwndMain, (HMENU)5, hInstance, NULL);
+
     detectCurrentServer(hwndMain);
     updateButtonLabel(hwndMain);
-    updateServerStatus(hwndMain); // 更新服务器状态
+    updateServerStatus(hwndMain);
 
     MSG msg = { };
     while (GetMessage(&msg, NULL, 0, 0)) {
@@ -100,18 +123,43 @@ LRESULT CALLBACK 转服小工具::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
         case WM_COMMAND:
             if (LOWORD(wParam) == 1) {
                 app->showProgressDialog(hwnd, L"正在复制文件...");
-                if (app->currentServer == L"国服") {
-                    app->copyDirectoryRecursively(app->source_global, app->destination_zzz);
-                    app->setConfigValue(app->config, app->key, L"hoyoverse");
-                    app->currentServer = L"国际服";
+                try {
+                    if (app->currentServer == L"国服") {
+                        app->copyDirectoryRecursively(app->source_global, app->destination_zzz);
+                        app->setConfigValue(app->config, app->key, L"hoyoverse");
+                        app->currentServer = L"国际服";
+                    }
+                    else {
+                        app->copyDirectoryRecursively(app->source_cn, app->destination_zzz);
+                        app->setConfigValue(app->config, app->key, L"update_pc");
+                        app->currentServer = L"国服";
+                    }
                 }
-                else {
-                    app->copyDirectoryRecursively(app->source_cn, app->destination_zzz);
-                    app->setConfigValue(app->config, app->key, L"update_pc");
-                    app->currentServer = L"国服";
+                catch (const std::exception& e) {
+                    std::wstring error_message = L"文件系统错误: " + 转服小工具::s2ws(e.what());
+                    app->copyToClipboard(error_message);
+                    MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
                 }
                 app->updateButtonLabel(hwnd);
                 app->updateServerStatus(hwnd);
+            }
+            else if (LOWORD(wParam) == 2) {
+                app->detectCurrentServer(hwnd);
+            }
+            else if (LOWORD(wParam) == 3) {
+                app->updateReplacementFiles(hwnd);
+            }
+            else if (LOWORD(wParam) == 4) {
+                std::wstring value = app->getConfigValue(app->config, app->key);
+                if (value == L"update_pc") {
+                    app->backupResources(app->destination_zzz, app->source_cn);
+                }
+                else {
+                    app->backupResources(app->destination_zzz, app->source_global);
+                }
+            }
+            else if (LOWORD(wParam) == 5) {
+                app->reselectDirectories(hwnd);
             }
             break;
         case WM_CREATE:
@@ -127,18 +175,6 @@ LRESULT CALLBACK 转服小工具::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
         return 0;
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
-}
-
-void 转服小工具::copyFiles(const std::wstring& source, const std::wstring& target) {
-    SHFILEOPSTRUCTW fileOp = { 0 };
-    fileOp.wFunc = FO_COPY;
-    std::wstring from = source + L"\\*.*" + L'\0';  // 拷贝source目录下的所有文件
-    std::wstring to = target + L'\0';
-    fileOp.pFrom = from.c_str();
-    fileOp.pTo = to.c_str();
-    fileOp.fFlags = FOF_NOCONFIRMATION | FOF_NOCOPYSECURITYATTRIBS | FOF_NOERRORUI;
-
-    SHFileOperationW(&fileOp);
 }
 
 std::wstring 转服小工具::getConfigValue(const std::wstring& config, const std::wstring& key) {
@@ -271,14 +307,167 @@ void 转服小工具::showProgressDialog(HWND hwnd, const std::wstring& message) {
 
 void 转服小工具::copyDirectoryRecursively(const std::wstring& source, const std::wstring& target) {
     try {
+        if (!fs::exists(source)) {
+            throw std::runtime_error("源目录不存在: " + ws2s(source));
+        }
+
+        if (!fs::exists(target)) {
+            fs::create_directories(target);
+        }
+
         for (const auto& entry : fs::recursive_directory_iterator(source)) {
             const auto& path = entry.path();
             auto relativePathStr = path.lexically_relative(source).wstring();
-            fs::copy(path, target + L"\\" + relativePathStr, fs::copy_options::overwrite_existing | fs::copy_options::recursive);
+            auto targetPath = target + L"\\" + relativePathStr;
+
+            if (fs::is_directory(path)) {
+                if (!fs::exists(targetPath)) {
+                    fs::create_directories(targetPath);
+                }
+            }
+            else {
+                fs::copy(path, targetPath, fs::copy_options::overwrite_existing);
+            }
         }
     }
     catch (const fs::filesystem_error& e) {
-        std::wstring error_message = L"文件系统错误: " + std::wstring(e.what(), e.what() + strlen(e.what()));
+        std::wstring error_message = L"文件系统错误: " + s2ws(e.what());
+        copyToClipboard(error_message);
         MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
     }
+    catch (const std::exception& e) {
+        std::wstring error_message = L"错误: " + s2ws(e.what());
+        copyToClipboard(error_message);
+        MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+    }
+}
+
+
+
+void 转服小工具::updateReplacementFiles(HWND hwnd) {
+    showProgressDialog(hwnd, L"正在更新替换文件...");
+    try {
+        if (currentServer == L"国服") {
+            copyDirectoryRecursively(source_cn, destination_zzz);
+        }
+        else if (currentServer == L"国际服") {
+            copyDirectoryRecursively(source_global, destination_zzz);
+        }
+    }
+    catch (const std::exception& e) {
+        std::wstring error_message = L"文件系统错误: " + 转服小工具::s2ws(e.what());
+        copyToClipboard(error_message);
+        MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+    }
+}
+
+void 转服小工具::backupFiles(const std::wstring& destination, const std::wstring& target) {
+    std::vector<std::wstring> files = {
+        L"ZenlessZoneZero.exe",
+        L"pkg_version",
+        L"GameAssembly.dll",
+        L"config.ini",
+        L"ZenlessZoneZero_Data\\globalgamemanagers",
+        L"ZenlessZoneZero_Data\\globalgamemanagers.assets",
+        L"ZenlessZoneZero_Data\\globalgamemanagers.assets.resS",
+        L"ZenlessZoneZero_Data\\level0",
+        L"ZenlessZoneZero_Data\\resources.assets",
+        L"ZenlessZoneZero_Data\\resources.assets.resS",
+        L"ZenlessZoneZero_Data\\sharedassets0.assets",
+        L"ZenlessZoneZero_Data\\il2cpp_data\\Metadata\\global-metadata.dat",
+        L"ZenlessZoneZero_Data\\il2cpp_data\\Metadata\\startup-metadata.dat"
+    };
+
+    for (const auto& file : files) {
+        try {
+            auto sourcePath = destination + L"\\" + file;
+            auto targetPath = target + L"\\" + file;
+
+            auto parent_path = fs::path(targetPath).parent_path();
+            if (!fs::exists(parent_path)) {
+                fs::create_directories(parent_path);
+            }
+
+            fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing);
+        }
+        catch (const fs::filesystem_error& e) {
+            std::wstring error_message = L"文件系统错误: " + s2ws(e.what());
+            copyToClipboard(error_message);
+            MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+        }
+        catch (const std::exception& e) {
+            std::wstring error_message = L"错误: " + s2ws(e.what());
+            copyToClipboard(error_message);
+            MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+        }
+    }
+}
+
+
+void 转服小工具::backupResources(const std::wstring& destination, const std::wstring& target) {
+    try {
+        auto sourcePath = destination + L"\\ZenlessZoneZero_Data\\Persistent";
+        auto targetPath = target + L"\\ZenlessZoneZero_Data\\Persistent";
+
+        if (!fs::exists(targetPath)) {
+            fs::create_directories(targetPath);
+        }
+
+        fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing | fs::copy_options::recursive);
+    }
+    catch (const fs::filesystem_error& e) {
+        std::wstring error_message = L"文件系统错误: " + s2ws(e.what());
+        copyToClipboard(error_message);
+        MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+    }
+    catch (const std::exception& e) {
+        std::wstring error_message = L"错误: " + s2ws(e.what());
+        copyToClipboard(error_message);
+        MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+    }
+}
+
+
+
+
+void 转服小工具::reselectDirectories(HWND hwnd) {
+    MessageBox(hwnd, L"请选择本地游戏目录", L"提示", MB_OK);
+    destination_zzz = browseFolder(L"请选择本地游戏目录");
+
+    MessageBox(hwnd, L"请选择资源目录", L"提示", MB_OK);
+    std::wstring data_folder = browseFolder(L"请选择资源目录");
+
+    source_global = data_folder + L"\\global";
+    source_cn = data_folder + L"\\cn";
+
+    saveConfig();
+    detectCurrentServer(hwnd);
+    updateButtonLabel(hwnd);
+    updateServerStatus(hwnd);
+}
+
+void 转服小工具::copyToClipboard(const std::wstring& text) {
+    if (OpenClipboard(NULL)) {
+        EmptyClipboard();
+        HGLOBAL hClipboardData = GlobalAlloc(GMEM_DDESHARE, (text.size() + 1) * sizeof(wchar_t));
+        wchar_t* pchData = (wchar_t*)GlobalLock(hClipboardData);
+        wcscpy_s(pchData, text.size() + 1, text.c_str());
+        GlobalUnlock(hClipboardData);
+        SetClipboardData(CF_UNICODETEXT, hClipboardData);
+        CloseClipboard();
+    }
+}
+
+std::wstring 转服小工具::s2ws(const std::string& str) {
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstr(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size_needed);
+    return wstr;
+}
+
+std::string 转服小工具::ws2s(const std::wstring& wstr) {
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string str(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &str[0], size_needed, NULL, NULL);
+    return str;
 }
