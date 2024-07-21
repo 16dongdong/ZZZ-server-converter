@@ -21,7 +21,8 @@ private:
     std::wstring browseFolder(const wchar_t* title);
     void saveConfig();
     bool loadConfig();
-    void showProgressDialog(HWND hwnd, const std::wstring& message);
+    void showProgressDialog(HWND hwnd, const std::wstring& message, int totalSteps);
+    void updateProgressDialog(int step);
     void copyDirectoryRecursively(const std::wstring& source, const std::wstring& target);
     void updateReplacementFiles(HWND hwnd);
     void backupFiles(const std::wstring& destination, const std::wstring& target);
@@ -31,6 +32,9 @@ private:
     static std::wstring s2ws(const std::string& str);
     static std::string ws2s(const std::wstring& wstr);
 
+    // 新增函数声明
+    void executeRobocopy(const std::wstring& source, const std::wstring& target, HWND hwndProgress);
+
     std::wstring source_global;
     std::wstring source_cn;
     std::wstring destination_zzz;
@@ -39,6 +43,8 @@ private:
     std::wstring currentServer;
     HINSTANCE hInstance;
     HWND hwndMain;
+    HWND hwndProgress;  // 进度条句柄
+    HWND hwndMessage;   // 消息框句柄
 };
 
 #endif // ZHUANFUXIAOGONGJU_H

@@ -8,7 +8,7 @@
 
 namespace fs = std::filesystem;
 
-转服小工具::转服小工具(HINSTANCE hInst) : hInstance(hInst) {}
+转服小工具::转服小工具(HINSTANCE hInst) : hInstance(hInst), hwndProgress(NULL), hwndMessage(NULL) {}
 
 void 转服小工具::run() {
     const wchar_t CLASS_NAME[] = L"ZhuanFuXiaoGongJuWindowClass";
@@ -80,13 +80,13 @@ void 转服小工具::run() {
         hwndMain, (HMENU)2, hInstance, NULL);
 
     CreateWindow(
-        L"BUTTON", L"更新当前服务器的替换文件",
+        L"BUTTON", L"更新数据（切换服务器后）",
         WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
         100, 180, 200, 30,
         hwndMain, (HMENU)3, hInstance, NULL);
 
     CreateWindow(
-        L"BUTTON", L"备份当前服务器资源文件夹",
+        L"BUTTON", L"保留已更新数据",
         WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
         100, 230, 200, 30,
         hwndMain, (HMENU)4, hInstance, NULL);
@@ -122,7 +122,7 @@ LRESULT CALLBACK 转服小工具::WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
         switch (uMsg) {
         case WM_COMMAND:
             if (LOWORD(wParam) == 1) {
-                app->showProgressDialog(hwnd, L"正在复制文件...");
+                app->showProgressDialog(hwnd, L"正在复制文件...", 100);
                 try {
                     if (app->currentServer == L"国服") {
                         app->copyDirectoryRecursively(app->source_global, app->destination_zzz);
@@ -287,23 +287,30 @@ bool 转服小工具::loadConfig() {
     return !(source_global.empty() || source_cn.empty() || destination_zzz.empty());
 }
 
-void 转服小工具::showProgressDialog(HWND hwnd, const std::wstring& message) {
-    HWND progressDialog = CreateWindowEx(
-        0, PROGRESS_CLASS, NULL,
-        WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
-        50, 120, 300, 30,
+void 转服小工具::showProgressDialog(HWND hwnd, const std::wstring& message, int totalSteps) {
+    hwndProgress = CreateWindowEx(0, PROGRESS_CLASS, NULL,
+        WS_CHILD | WS_VISIBLE,
+        50, 10, 300, 10,  // 设置进度条的位置和大小
         hwnd, NULL, hInstance, NULL);
 
-    SendMessage(progressDialog, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-    SendMessage(progressDialog, PBM_SETSTEP, (WPARAM)1, 0);
+    SendMessage(hwndProgress, PBM_SETRANGE, 0, MAKELPARAM(0, totalSteps));
+    SendMessage(hwndProgress, PBM_SETSTEP, (WPARAM)1, 0);
 
-    for (int i = 0; i <= 100; ++i) {
-        SendMessage(progressDialog, PBM_STEPIT, 0, 0);
-        Sleep(10);
-    }
-
-    DestroyWindow(progressDialog);
+    hwndMessage = CreateWindowEx(0, L"STATIC", message.c_str(),
+        WS_CHILD | WS_VISIBLE,
+        50, 70, 300, 20,  // 设置消息框的位置和大小
+        hwnd, NULL, hInstance, NULL);
 }
+
+void 转服小工具::updateProgressDialog(int step) {
+    SendMessage(hwndProgress, PBM_STEPIT, 0, 0);
+    if (step >= 100) {
+        Sleep(500);  // 给用户一点时间看到进度完成
+        DestroyWindow(hwndProgress);
+        DestroyWindow(hwndMessage);
+    }
+}
+
 
 void 转服小工具::copyDirectoryRecursively(const std::wstring& source, const std::wstring& target) {
     try {
@@ -315,37 +322,20 @@ void 转服小工具::copyDirectoryRecursively(const std::wstring& source, const std:
             fs::create_directories(target);
         }
 
-        for (const auto& entry : fs::recursive_directory_iterator(source)) {
-            const auto& path = entry.path();
-            auto relativePathStr = path.lexically_relative(source).wstring();
-            auto targetPath = target + L"\\" + relativePathStr;
-
-            if (fs::is_directory(path)) {
-                if (!fs::exists(targetPath)) {
-                    fs::create_directories(targetPath);
-                }
-            }
-            else {
-                fs::copy(path, targetPath, fs::copy_options::overwrite_existing);
-            }
-        }
+        executeRobocopy(source, target, hwndProgress);
     }
     catch (const fs::filesystem_error& e) {
         std::wstring error_message = L"文件系统错误: " + s2ws(e.what());
-        copyToClipboard(error_message);
         MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
     }
     catch (const std::exception& e) {
         std::wstring error_message = L"错误: " + s2ws(e.what());
-        copyToClipboard(error_message);
         MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
     }
 }
 
-
-
 void 转服小工具::updateReplacementFiles(HWND hwnd) {
-    showProgressDialog(hwnd, L"正在更新替换文件...");
+    showProgressDialog(hwnd, L"正在更新替换文件...", 100);
     try {
         if (currentServer == L"国服") {
             copyDirectoryRecursively(source_cn, destination_zzz);
@@ -362,73 +352,36 @@ void 转服小工具::updateReplacementFiles(HWND hwnd) {
 }
 
 void 转服小工具::backupFiles(const std::wstring& destination, const std::wstring& target) {
-    std::vector<std::wstring> files = {
-        L"ZenlessZoneZero.exe",
-        L"pkg_version",
-        L"GameAssembly.dll",
-        L"config.ini",
-        L"ZenlessZoneZero_Data\\globalgamemanagers",
-        L"ZenlessZoneZero_Data\\globalgamemanagers.assets",
-        L"ZenlessZoneZero_Data\\globalgamemanagers.assets.resS",
-        L"ZenlessZoneZero_Data\\level0",
-        L"ZenlessZoneZero_Data\\resources.assets",
-        L"ZenlessZoneZero_Data\\resources.assets.resS",
-        L"ZenlessZoneZero_Data\\sharedassets0.assets",
-        L"ZenlessZoneZero_Data\\il2cpp_data\\Metadata\\global-metadata.dat",
-        L"ZenlessZoneZero_Data\\il2cpp_data\\Metadata\\startup-metadata.dat"
-    };
-
-    for (const auto& file : files) {
-        try {
-            auto sourcePath = destination + L"\\" + file;
-            auto targetPath = target + L"\\" + file;
-
-            auto parent_path = fs::path(targetPath).parent_path();
-            if (!fs::exists(parent_path)) {
-                fs::create_directories(parent_path);
-            }
-
-            fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing);
-        }
-        catch (const fs::filesystem_error& e) {
-            std::wstring error_message = L"文件系统错误: " + s2ws(e.what());
-            copyToClipboard(error_message);
-            MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
-        }
-        catch (const std::exception& e) {
-            std::wstring error_message = L"错误: " + s2ws(e.what());
-            copyToClipboard(error_message);
-            MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
-        }
-    }
-}
-
-
-void 转服小工具::backupResources(const std::wstring& destination, const std::wstring& target) {
     try {
-        auto sourcePath = destination + L"\\ZenlessZoneZero_Data\\Persistent";
-        auto targetPath = target + L"\\ZenlessZoneZero_Data\\Persistent";
+        // 创建进度条和消息框
+        showProgressDialog(hwndMain, L"正在备份文件...", 100);
 
-        if (!fs::exists(targetPath)) {
-            fs::create_directories(targetPath);
-        }
+        executeRobocopy(destination, target, hwndProgress);
 
-        fs::copy(sourcePath, targetPath, fs::copy_options::overwrite_existing | fs::copy_options::recursive);
-    }
-    catch (const fs::filesystem_error& e) {
-        std::wstring error_message = L"文件系统错误: " + s2ws(e.what());
-        copyToClipboard(error_message);
-        MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+        DestroyWindow(hwndProgress);
+        DestroyWindow(hwndMessage);
     }
     catch (const std::exception& e) {
         std::wstring error_message = L"错误: " + s2ws(e.what());
-        copyToClipboard(error_message);
         MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
     }
 }
 
+void 转服小工具::backupResources(const std::wstring& destination, const std::wstring& target) {
+    try {
+        // 创建进度条和消息框
+        showProgressDialog(hwndMain, L"正在备份资源文件...", 100);
 
+        executeRobocopy(destination + L"\\ZenlessZoneZero_Data\\Persistent", target + L"\\ZenlessZoneZero_Data\\Persistent", hwndProgress);
 
+        DestroyWindow(hwndProgress);
+        DestroyWindow(hwndMessage);
+    }
+    catch (const std::exception& e) {
+        std::wstring error_message = L"错误: " + s2ws(e.what());
+        MessageBox(NULL, error_message.c_str(), L"错误", MB_OK | MB_ICONERROR);
+    }
+}
 
 void 转服小工具::reselectDirectories(HWND hwnd) {
     MessageBox(hwnd, L"请选择本地游戏目录", L"提示", MB_OK);
@@ -470,4 +423,29 @@ std::string 转服小工具::ws2s(const std::wstring& wstr) {
     std::string str(size_needed, 0);
     WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &str[0], size_needed, NULL, NULL);
     return str;
+}
+//进度条
+void 转服小工具::executeRobocopy(const std::wstring& source, const std::wstring& target, HWND hwndProgress) {
+    std::wstring command = L"robocopy \"" + source + L"\" \"" + target + L"\" /E /COPYALL /R:3 /W:5 /NFL /NDL /NJH /NJS /NC /NS";
+    STARTUPINFO si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    if (CreateProcess(NULL, &command[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+    else {
+        std::wcerr << L"Failed to execute robocopy command." << std::endl;
+    }
+
+    for (int i = 0; i <= 100; ++i) {
+        SendMessage(hwndProgress, PBM_STEPIT, 0, 0);
+        Sleep(50);
+    }
+
+    updateProgressDialog(100);
+
 }
